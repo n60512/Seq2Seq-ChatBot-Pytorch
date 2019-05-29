@@ -23,6 +23,10 @@ device
 modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\pretrain_fasttext_cc_zh_300.bin'
 model = FastText.load_fasttext_format(modelPath)
 
+#%%
+""" pre-train word embedding ()"""
+modelPath = R'Gossiping_d300_count5.model'
+model = models.Word2Vec.load(modelPath)
 
 #%%
 def prepareData():
@@ -99,7 +103,7 @@ class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size):
         super(EncoderRNN, self).__init__()
         self.hidden_size = hidden_size
-        self.rnn = nn.LSTM(input_size, hidden_size)
+        self.rnn = nn.GRU(input_size, hidden_size)
 
     def forward(self, input, hidden = None):
         output, hidden = self.rnn(input, hidden)
@@ -117,7 +121,7 @@ class DecoderRNN(nn.Module):
 
         # self.embedding = nn.Embedding(output_size, hidden_size)
         # self.gru = nn.GRU(hidden_size, hidden_size)
-        self.rnn = nn.LSTM(input_size, hidden_size)
+        self.rnn = nn.GRU(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
         # self.softmax = nn.LogSoftmax(dim=1)
 
@@ -252,15 +256,15 @@ for iter in range(1, n_iters + 1):
 
 #%%
 """ Store model"""
-torch.save(encoder, 'encoder.pkl')  # Save model
-torch.save(decoder, 'decoder.pkl')  # Save model
+torch.save(encoder, 'encoder_Gossiping.pkl')  # Save model
+torch.save(decoder, 'decoder_Gossiping.pkl')  # Save model
 
 #%%
 """ evluate """
 
 
 """ Input Question """
-testPair = qa_pair[20] ## testing
+testPair = qa_pair[50] ## testing
 q_,a_ = getSegmentEmbeddingTensor(testPair)
 input_tensor = q_
 # input_tensor[0].view(1,300).size()
