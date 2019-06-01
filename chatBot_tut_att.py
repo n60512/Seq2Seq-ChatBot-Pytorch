@@ -171,7 +171,7 @@ len(qa_pair)
 
 #%%
 myVoc = Voc('Gops')
-sample_qa_pair = qa_pair[:20000]       ## 取樣
+sample_qa_pair = qa_pair[:200000]       ## 取樣
 for single_pair in sample_qa_pair:
     # q_,a_ = getSegment(single_pair)
     q_,a_ = getCharSegment(single_pair)
@@ -357,12 +357,13 @@ class Attn(nn.Module):
         return F.softmax(attn_energies, dim=1).unsqueeze(1)
 
 #%%
+
 class LuongAttnDecoderRNN(nn.Module):
-    def __init__(self, embedding, hidden_size, output_size, n_layers=1, dropout=0.1):
+    def __init__(self, attn_model, embedding, hidden_size, output_size, n_layers=1, dropout=0.1):
         super(LuongAttnDecoderRNN, self).__init__()
 
         # Keep for reference
-        # self.attn_model = attn_model
+        self.attn_model = attn_model
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.n_layers = n_layers
@@ -372,11 +373,10 @@ class LuongAttnDecoderRNN(nn.Module):
         self.embedding = embedding
         self.embedding_dropout = nn.Dropout(dropout)
         self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=(0 if n_layers == 1 else dropout))
-        # self.concat = nn.Linear(hidden_size * 2, hidden_size)
+        self.concat = nn.Linear(hidden_size * 2, hidden_size)
         self.out = nn.Linear(hidden_size, output_size)
-        # self.softmax = nn.LogSoftmax(dim=1)
 
-        # self.attn = Attn(attn_model, hidden_size)
+        self.attn = Attn(attn_model, hidden_size)
 
     def forward(self, input_step, last_hidden, encoder_outputs):
         # Note: we run this one step (word) at a time
@@ -385,27 +385,21 @@ class LuongAttnDecoderRNN(nn.Module):
         embedded = self.embedding_dropout(embedded)
         # Forward through unidirectional GRU
         rnn_output, hidden = self.gru(embedded, last_hidden)
-
-        """ attention version """
-        # # Calculate attention weights from the current GRU output
-        # attn_weights = self.attn(rnn_output, encoder_outputs)
-        # # Multiply attention weights to encoder outputs to get new "weighted sum" context vector
-        # context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
-        # # Concatenate weighted context vector and GRU output using Luong eq. 5
-        # rnn_output = rnn_output.squeeze(0)
-        # context = context.squeeze(1)
-        # concat_input = torch.cat((rnn_output, context), 1)
-        # concat_output = torch.tanh(self.concat(concat_input))
-        # # Predict next word using Luong eq. 6
-        # output = self.out(concat_output)
-        # output = F.softmax(output, dim=1)
-
-        # output = torch.tanh(rnn_output)
-        output = self.out(rnn_output)
-        # output = F.softmax(rnn_output, dim=1).squeeze(0)
-
+        # Calculate attention weights from the current GRU output
+        attn_weights = self.attn(rnn_output, encoder_outputs)
+        # Multiply attention weights to encoder outputs to get new "weighted sum" context vector
+        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
+        # Concatenate weighted context vector and GRU output using Luong eq. 5
+        rnn_output = rnn_output.squeeze(0)
+        context = context.squeeze(1)
+        concat_input = torch.cat((rnn_output, context), 1)
+        concat_output = torch.tanh(self.concat(concat_input))
+        # Predict next word using Luong eq. 6
+        output = self.out(concat_output)
+        output = F.softmax(output, dim=1)
         # Return output and final hidden state
         return output, hidden
+
 
 #%%
 def maskNLLLoss(inp, target, mask):
@@ -423,26 +417,27 @@ hidden_size = 500
 encoder_n_layers = 2
 decoder_n_layers = 2
 dropout = 0.1
-batch_size = 64
+batch_size = 256
+attn_model = 'dot'
 
 print('Building encoder and decoder ...')
 # Initialize word embeddings
 embedding = nn.Embedding(myVoc.num_words, hidden_size)
 # Initialize encoder & decoder models
 encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
-decoder = LuongAttnDecoderRNN( embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
+decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
 # Use appropriate device
 encoder = encoder.to(device)
 decoder = decoder.to(device)
 
 #%%
 # Example for validation
-small_batch_size = 64
+small_batch_size = 256
 batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(small_batch_size)])
 input_variable, lengths, target_variable, mask, max_target_len = batches
 #%%
-learning_rate = 0.000001
-decoder_learning_ratio = 3.0
+learning_rate = 0.0001
+decoder_learning_ratio = 5.0
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
 
@@ -560,7 +555,7 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
             n_totals += nTotal
 
 
-            if(t==0):
+            if(t==0 and False):
                 print('=============')
                 # print(decoder_input, decoder_hidden, encoder_outputs)
                 # print(decoder_output.size())
@@ -613,8 +608,8 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 #%%
 
-n_iteration = 4000
-batch_size = 64
+n_iteration = 50000
+batch_size = 256
 # Load batches for each iteration
 training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
 
@@ -651,3 +646,103 @@ for iteration in range(start_iteration, n_iteration + 1):
 
 #%%
 max_target_len
+
+#%%
+torch.save(encoder, 'encoder_v1')
+torch.save(decoder, 'decoder_v1')
+
+#%%
+class GreedySearchDecoder(nn.Module):
+    def __init__(self, encoder, decoder):
+        super(GreedySearchDecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def forward(self, input_seq, input_length, max_length):
+        # Forward input through encoder model
+        encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
+        # Prepare encoder's final hidden layer to be first hidden input to the decoder
+        decoder_hidden = encoder_hidden[:decoder.n_layers]
+        # Initialize decoder input with SOS_token
+        decoder_input = torch.ones(1, 1, device=device, dtype=torch.long) * SOS_token
+        # Initialize tensors to append decoded words to
+        all_tokens = torch.zeros([0], device=device, dtype=torch.long)
+        all_scores = torch.zeros([0], device=device)
+        # Iteratively decode one word token at a time
+        for _ in range(max_length):
+            # Forward pass through decoder
+            decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden, encoder_outputs)
+            # Obtain most likely word token and its softmax score
+            decoder_scores, decoder_input = torch.max(decoder_output, dim=1)
+            # Record token and score
+            all_tokens = torch.cat((all_tokens, decoder_input), dim=0)
+            all_scores = torch.cat((all_scores, decoder_scores), dim=0)
+            # Prepare current token to be next decoder input (add a dimension)
+            decoder_input = torch.unsqueeze(decoder_input, 0)
+        # Return collections of word tokens and scores
+        return all_tokens, all_scores
+
+#%%
+encoder = torch.load('encoder_v1')
+decoder = torch.load('decoder_v1')
+encoder.eval()
+decoder.eval()
+
+#%%
+searcher = GreedySearchDecoder(encoder, decoder)
+
+
+#%%
+
+def evaluate(encoder, decoder, searcher, voc, sentence, max_length=MAX_LENGTH):
+    ### Format input sentence as a batch
+    # words -> indexes
+    indexes_batch = [indexesFromSentence(voc, sentence)]
+    # Create lengths tensor
+    lengths = torch.tensor([len(indexes) for indexes in indexes_batch])
+    # Transpose dimensions of batch to match models' expectations
+    input_batch = torch.LongTensor(indexes_batch).transpose(0, 1)
+    # Use appropriate device
+    input_batch = input_batch.to(device)
+    lengths = lengths.to(device)
+    # Decode sentence with searcher
+    tokens, scores = searcher(input_batch, lengths, max_length)
+    # indexes -> words
+    decoded_words = [voc.index2word[token.item()] for token in tokens]
+    return decoded_words
+
+
+def evaluateInput(encoder, decoder, searcher, voc):
+    input_sentence = ''
+    while(1):
+        try:
+            # Get input sentence
+            input_sentence = input('> ')
+            # Check if it is quit case
+            if input_sentence == 'q' or input_sentence == 'quit': break
+            # Normalize sentence
+            input_sentence = normalizeString(input_sentence)
+            # Evaluate sentence
+            output_words = evaluate(encoder, decoder, searcher, voc, input_sentence)
+            # Format and print response sentence
+            output_words[:] = [x for x in output_words if not (x == 'EOS' or x == 'PAD')]
+            print('Bot:', ' '.join(output_words))
+
+        except KeyError:
+            print("Error: Encountered unknown word.")
+
+
+#%%
+evaluateInput(encoder, decoder, searcher, myVoc)
+
+#%%
+testSentence = '你好嗎?'
+testVoc = Voc('testSentence')
+
+for char in testSentence:
+    testVoc.addSentence(char)
+
+#%%
+testVoc.index2word,testVoc.word2index
+
+#%%
