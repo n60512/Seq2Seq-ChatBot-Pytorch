@@ -648,8 +648,8 @@ for iteration in range(start_iteration, n_iteration + 1):
 max_target_len
 
 #%%
-torch.save(encoder, 'encoder_v1')
-torch.save(decoder, 'decoder_v1')
+torch.save(encoder, 'encoder_v2')
+torch.save(decoder, 'decoder_v2')
 
 #%%
 class GreedySearchDecoder(nn.Module):
