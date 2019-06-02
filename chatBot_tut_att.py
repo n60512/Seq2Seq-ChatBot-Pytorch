@@ -171,7 +171,8 @@ len(qa_pair)
 
 #%%
 myVoc = Voc('Gops')
-sample_qa_pair = qa_pair[:200000]       ## 取樣
+# sample_qa_pair = qa_pair[:200000]       ## 取樣
+sample_qa_pair = qa_pair       ## 取樣
 for single_pair in sample_qa_pair:
     # q_,a_ = getSegment(single_pair)
     q_,a_ = getCharSegment(single_pair)
@@ -506,7 +507,7 @@ encoder_outputs.size()
 #%%
 
 
-MAX_LENGTH=30
+MAX_LENGTH=50
 
 def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, embedding,
           encoder_optimizer, decoder_optimizer, batch_size, clip, max_length=MAX_LENGTH):
@@ -608,7 +609,7 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 #%%
 
-n_iteration = 50000
+n_iteration = 100000
 batch_size = 256
 # Load batches for each iteration
 training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
@@ -643,13 +644,14 @@ for iteration in range(start_iteration, n_iteration + 1):
         print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f}".format(iteration, iteration / n_iteration * 100, print_loss_avg))
         print_loss = 0
 
-
+torch.save(encoder, 'encoder_v3')
+torch.save(decoder, 'decoder_v3')
 #%%
 max_target_len
 
 #%%
-torch.save(encoder, 'encoder_v2')
-torch.save(decoder, 'decoder_v2')
+torch.save(encoder, 'encoder_v3')
+torch.save(decoder, 'decoder_v3')
 
 #%%
 class GreedySearchDecoder(nn.Module):
