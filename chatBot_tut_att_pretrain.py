@@ -17,14 +17,13 @@ import unicodedata
 import codecs
 from io import open
 import itertools
-import math
-
 
 from gensim import models
 from gensim.models.wrappers import FastText
 import gensim
 import jieba
 import math
+import numpy as np
 
 #%%
 """ Set device """
@@ -32,11 +31,16 @@ USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
 
 #%%
-""" pre-train word embedding """
+""" Loading pre-train word embedding """
 
+# modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\word2vec.model'
+# model = models.Word2Vec.load(modelPath)
 
-# modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\pretrain_fasttext_cc_zh_300.bin'
-# model = FastText.load_fasttext_format(modelPath)
+modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\pretrain_fasttext_cc_zh_300.bin'
+model = FastText.load_fasttext_format(modelPath)
+
+#%%
+model = None
 
 #%%
 def prepareData():
@@ -46,12 +50,12 @@ def prepareData():
         content = f.readlines()
     
     for pair in content:
-        tmp = pair.replace(' ','').replace('\n','').split('\t')
-        qa_pair.append([tmp[0],tmp[1]])
+        tmp = pair.replace(' ','').replace('\n','').split('\t') ## split  Q && A
+        qa_pair.append([re.sub('\W', '', tmp[0]),re.sub('\W', '', tmp[1])]) ## Sentence 正規化
+
     return qa_pair
     
 qa_pair = prepareData()
-
 
 #%%
 
@@ -64,7 +68,7 @@ class Voc:
     def __init__(self, name):
         self.name = name
         self.trimmed = False
-        self.word2index = {}
+        self.word2index = {'PAD':0,'SOS':1,'EOS':2}
         self.word2count = {}
         self.index2word = {PAD_token: "PAD", SOS_token: "SOS", EOS_token: "EOS"}
         self.num_words = 3  # Count SOS, EOS, PAD
@@ -82,7 +86,8 @@ class Voc:
             self.index2word[self.num_words] = word
             self.num_words += 1
         else:
-            self.word2count[word] += 1
+            if(word !='PAD' and word !='EOS' and word !='SOS'):
+                self.word2count[word] += 1
 
     # Remove words below a certain count threshold
     def trim(self, min_count):
@@ -109,98 +114,103 @@ class Voc:
         for word in keep_words:
             self.addWord(word)
 
-
 #%%
-qa_pair[0][0]
-
-
-#%%
-def getSegmentEmbeddingTensor(sentence_pair):
-    """ 取得字詞 Embedding 以 tensor 回傳(QA pair) """
-    tensor_pair = list()
-    for i in range(len(sentence_pair)):
-        seg_list = jieba.lcut(sentence_pair[i])
-        
-        # print(seg_list)
-        tensor_Emb = list()
-        for text in seg_list:       # tensor_Emb = [model[text] for text in seg_list]
-            try:
-                tensor_Emb.append(model[text])
-            except KeyError as msg:
-                if len(tensor_Emb)>0:
-                    tensor_Emb.append(tensor_Emb[len(tensor_Emb)-1])
-                else:
-                    tensor_Emb.append([0 for i in range(300)])
-            
-        # tensor_Emb = torch.FloatTensor(tensor_Emb)
-        # tensor_Emb = torch.LongTensor(tensor_Emb)
-        tensor_pair.append(tensor_Emb)
-
-    # return tensor_pair[0],tensor_pair[1]    ## 0: 問題(len字),1: 回答(len字)
-    return torch.FloatTensor(tensor_pair[0]),torch.FloatTensor(tensor_pair[1])    ## 0: 問題(len字),1: 回答(len字)    
-
-#%%
-def getSegment(qa_pair):
-    """ ````` """
+def getSegment(qa_pair, mode='word'):
+    """ mode can be word-level or char-level """
     sentence_pair = list()
-    for i in range(len(qa_pair)):
-        seg_list = jieba.lcut(qa_pair[i])
-        sentence = list()
-        for text in seg_list:       # tensor_Emb = [model[text] for text in seg_list]
-            sentence.append(text)
-
-        sentence_pair.append(sentence)
-
-    return sentence_pair
-
-def getCharSegment(qa_pair):
-    sentence_pair = list()
-    for i in range(len(qa_pair)):
-        sentence = list()
-        for text in qa_pair[i]:
-            sentence.append(text)
-        sentence_pair.append(sentence)
-    return sentence_pair
+    if(mode == 'word'):
+        # word-level segent by Jieba
+        for index in range(len(qa_pair)):
+            seg_list = jieba.lcut(qa_pair[index])
+            sentence = list()
+            for text in seg_list:       # tensor_Emb = [model[text] for text in seg_list]
+                sentence.append(text)
+            sentence_pair.append(sentence)
+    elif(mode == 'char'):
+        # char-level segent by Jieba
+        for index in range(len(qa_pair)):
+            sentence = list()
+            for text in qa_pair[index]:
+                sentence.append(text)
+            sentence_pair.append(sentence)
     
-
-# t = getSegment(qa_pair[0])
-# t
-#%%
-len(qa_pair)
+    return sentence_pair
 
 #%%
 myVoc = Voc('Gops')
-# sample_qa_pair = qa_pair[:200000]       ## 取樣
 sample_qa_pair = qa_pair       ## 取樣
 for single_pair in sample_qa_pair:
-    # q_,a_ = getSegment(single_pair)
-    q_,a_ = getCharSegment(single_pair)
-    # print(q_,a_)
+    q_,a_ = getSegment(single_pair)
     myVoc.addSentence(q_)
     myVoc.addSentence(a_)
 
+print(q_,a_)
+#%%
+myVoc.index2word, myVoc.word2index, myVoc.word2count, myVoc.num_words
+#%%
+myVoc.num_words
+#%%
+matrix_len = myVoc.num_words
+weights_matrix = np.zeros((matrix_len, 300))    # 初始化
+words_found = 0
+weights_matrix
 
+#%%
+for index,word in myVoc.index2word.items():
+    if(word == 'EOS' or word =='SOS'):
+        weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(300))   ## random
+    elif(word == 'PAD'):
+        weights_matrix[index] = np.zeros(300)   
+    else:
+        try: 
+            weights_matrix[index] = model[word]
+            words_found += 1
+            if(words_found % 1000 == 0):
+                print('Num %s , success.'% words_found)
+        except KeyError as msg:
+            # weights_matrix[i] = np.random.normal(scale=0.6, size=(emb_dim, ))
+            # weights_matrix[index] = (weights_matrix[index-1] + model[myVoc.index2word[index + 1]])/2
+            weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(300))   ## random
+            # print(msg)
+
+#%%
+weights_matrix[myVoc.word2index['EOS']]
+#%%
+myVoc.word2index['PAD'],myVoc.word2index['歡迎']
+#%%
+weights_matrix.shape
 #%%
 myVoc.word2index
 #%%
-myVoc.word2count
-#%%
-myVoc.word2index['語']
+num_embeddings, embedding_dim = weights_matrix.shape
+num_embeddings, embedding_dim
 
 #%%
-testSen = sample_qa_pair[0][1]
-testSen
+weight = torch.FloatTensor(weights_matrix)
+embedding = nn.Embedding.from_pretrained(weight).to(device)
 #%%
-testSen.split('')
+# Get embeddings for index 1
+input = torch.LongTensor([0]).to(device)
+embedding(input)    ## weights_matrix
 #%%
-t = myVoc.word2index[word] for word in testSen.split(' ')
+weights_matrix[1]
+#%%
+myVoc.index2word[1]
+#%%
+embedding.size
+#%%
+""" Prepare data for model (未改)"""   
 
-#%%
-""" Prepare data for model """
 
-def indexesFromSentence(voc, sentence):
+def indexesFromSentence(voc, sentence ,mode = 'word'):
+    """ 可選 word level 或 char-level """
     # return [voc.word2index[word] for word in sentence.split(' ')] + [EOS_token]
-    return [voc.word2index[word] for word in sentence] + [EOS_token]
+    seg_list = jieba.lcut(sentence)
+    if(mode == 'word'):
+        return [voc.word2index[word] for word in seg_list] + [EOS_token]
+    elif (mode == 'char'):
+        return [voc.word2index[word] for word in sentence] + [EOS_token]
+    
 
 def zeroPadding(l, fillvalue=PAD_token):
     return list(itertools.zip_longest(*l, fillvalue=fillvalue))
@@ -246,48 +256,10 @@ def batch2TrainData(voc, pair_batch):
     output, mask, max_target_len = outputVar(output_batch, voc)
     return inp, lengths, output, mask, max_target_len
 
-#%%
-sample_qa_pair
-#%%
-pair_batch = [random.choice(sample_qa_pair) for _ in range(3)]
-pair_batch
-#%%
-# pair_batch.sort(key=lambda question: len(question[0].split(" ")), reverse=True)
-pair_batch.sort(key=lambda question: len(question[0]), reverse=True)
-pair_batch
-#%%
-input_batch, output_batch = [], []
-for pair in pair_batch:
-    input_batch.append(pair[0])
-    output_batch.append(pair[1])
-input_batch
-#%%
-inp, lengths = inputVar(input_batch, myVoc)
-output, mask, max_target_len = outputVar(output_batch, myVoc)
+""" (以上未改) """
 
 #%%
-inp
-#%%
-myVoc.word2index['什']
-
-
-
-
-#%%
-# Example for validation
-small_batch_size = 64
-batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(small_batch_size)])
-input_variable, lengths, target_variable, mask, max_target_len = batches
-
-#%%
-print("input_variable:", input_variable)
-print("lengths:", lengths)
-print("target_variable:", target_variable)
-print("mask:", mask)
-print("max_target_len:", max_target_len)
-
-
-#%%
+""" Encoder Model"""
 class EncoderRNN(nn.Module):
     def __init__(self, hidden_size, embedding, n_layers=1, dropout=0):
         super(EncoderRNN, self).__init__()
@@ -301,14 +273,22 @@ class EncoderRNN(nn.Module):
                           dropout=(0 if n_layers == 1 else dropout), bidirectional=True)
 
     def forward(self, input_seq, input_lengths, hidden=None):
-        # Convert word indexes to embeddings
-        embedded = self.embedding(input_seq)
-        # Pack padded batch of sequences for RNN module
-        packed = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths) ## 產生 padding 後的 embedding
+        # # Convert word indexes to embeddings
+        # embedded = self.embedding(input_seq)
+        # # Pack padded batch of sequences for RNN module
+        # packed = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths) ## 產生 padding 後的 embedding
+
+        # embedded = self.embedding(torch.LongTensor([input_seq]))
+
+        ## pre-train
+        embedded = embedding(torch.cuda.LongTensor(input_seq))
+        packed = embedded
+
         # Forward pass through GRU
         outputs, hidden = self.gru(packed, hidden)
-        # Unpack padding
-        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+        # # Unpack padding
+        # outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
+
         # Sum bidirectional GRU outputs
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
         # Return output and final hidden state
@@ -380,7 +360,8 @@ class LuongAttnDecoderRNN(nn.Module):
     def forward(self, input_step, last_hidden, encoder_outputs):
         # Note: we run this one step (word) at a time
         # Get embedding of current input word
-        embedded = self.embedding(input_step)
+        # embedded = self.embedding(input_step)
+        embedded = embedding(torch.cuda.LongTensor(input_step))
         embedded = self.embedding_dropout(embedded)
         # Forward through unidirectional GRU
         rnn_output, hidden = self.gru(embedded, last_hidden)
@@ -409,101 +390,80 @@ def maskNLLLoss(inp, target, mask):
     return loss, nTotal.item()
 
 
+
+
 #%%
 
-""" Train testing """
-hidden_size = 500
+""" Single Train testing  [Start] ..."""
+hidden_size = 300
 encoder_n_layers = 2
 decoder_n_layers = 2
 dropout = 0.1
-batch_size = 256
+batch_size = 64
 attn_model = 'dot'
 
 print('Building encoder and decoder ...')
-# Initialize word embeddings
-embedding = nn.Embedding(myVoc.num_words, hidden_size)
 # Initialize encoder & decoder models
+"""Embedding pretrain"""
 encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
 decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
+
 # Use appropriate device
 encoder = encoder.to(device)
 decoder = decoder.to(device)
 
 #%%
-# Example for validation
-small_batch_size = 256
+""" Example for validation """
+small_batch_size = 64
 batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(small_batch_size)])
 input_variable, lengths, target_variable, mask, max_target_len = batches
+
 #%%
 learning_rate = 0.0001
 decoder_learning_ratio = 5.0
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
 
-#%%
-""" training example"""
-
 # Zero gradients
 encoder_optimizer.zero_grad()
 decoder_optimizer.zero_grad()
 
+#%%
+""" training example"""
 # Set device options
 input_variable = input_variable.to(device)
 lengths = lengths.to(device)
 target_variable = target_variable.to(device)
 mask = mask.to(device)
 
-# Initialize variables
+""" Initialize variables """
 loss = 0
 print_losses = []
 n_totals = 0
 
 #%%
-# Forward pass through encoder
+""" Forward pass through encoder """
 encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
+
 #%%
+""" Show encoder output """
+encoder_outputs
+
+#%%
+""" Decoder setup"""
 decoder_input = torch.LongTensor([[SOS_token for _ in range(batch_size)]])
 decoder_input = decoder_input.to(device)
 decoder_hidden = encoder_hidden[:decoder.n_layers]
+
 #%%
-decoder_input.size()
-#%%
+""" Forward pass through decoder """ 
 decoder_output, decoder_hidden = decoder(
     decoder_input, decoder_hidden, encoder_outputs
 )
-#%%
-decoder_output.size()
-#%%
-decoder_output
+""" Single Train testing  [End] ."""
 
 #%%
-mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[0], mask[0])
-#%%
-""" 算 loss"""
-nTotal = mask.sum()
-nTotal
-#%%
-target_variable[0].view(-1, 1)
-#%%
-crossEntropy = -torch.log(torch.gather(decoder_output, 1, target_variable[0].view(-1, 1)).squeeze(1))
-crossEntropy
-#%%
-loss = crossEntropy.masked_select(mask).mean()
-loss = loss.to(device)
-#%%
-mask_loss, nTotal
-#%%
-mask_loss.item()
-#%%
-batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(6)])
-input_variable, lengths, target_variable, mask, max_target_len = batches
-lengths
-
-#%%
-encoder_outputs.size()
-
-#%%
-
+""" Training Function """
 
 MAX_LENGTH=50
 
@@ -606,14 +566,21 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 
 #%%
-
-n_iteration = 100000
-batch_size = 256
+""" Training """
+n_iteration = 5000
+batch_size = 128
 # Load batches for each iteration
-training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
+# training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
+
+training_batches = list()
+for _ in range(n_iteration):
+    training_batches.append(batch2TrainData(myVoc, [random.choice(sample_qa_pair) for i in range(batch_size)]))
+    if(_%100==0):
+        print('Num of n_iteration [%s] is Success' % _)
 
 #%%
-training_batches
+for obj in training_batches[1]:
+    print(obj.size())
 #%%
 # Initializations
 print('Initializing ...')
@@ -622,9 +589,36 @@ print_loss = 0
 print_every = 100
 clip = 50.0
 teacher_forcing_ratio = 1.0
+
 #%%
-# Training loop
-print("Training...")
+""" Model setup """
+hidden_size = 300
+encoder_n_layers = 2
+decoder_n_layers = 2
+dropout = 0.1
+attn_model = 'dot'
+
+print('Building encoder and decoder ...')
+
+# Initialize word embeddings
+embedding = nn.Embedding(myVoc.num_words, hidden_size)
+# Initialize encoder & decoder models
+encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
+decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
+# Use appropriate device
+encoder = encoder.to(device)
+decoder = decoder.to(device)
+
+#%%
+learning_rate = 0.0001
+decoder_learning_ratio = 5.0
+encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
+
+
+#%%
+
+print("Start Training...")
 for iteration in range(start_iteration, n_iteration + 1):
     training_batch = training_batches[iteration - 1]
     # Extract fields from batch
@@ -642,16 +636,14 @@ for iteration in range(start_iteration, n_iteration + 1):
         print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f}".format(iteration, iteration / n_iteration * 100, print_loss_avg))
         print_loss = 0
 
-torch.save(encoder, 'encoder_v4')
-torch.save(decoder, 'decoder_v4')
-#%%
-max_target_len
+torch.save(encoder, 'encoder_pretrain')
+torch.save(decoder, 'decoder_pretrain')
+
+
 
 #%%
-torch.save(encoder, 'encoder_v4')
-torch.save(decoder, 'decoder_v4')
+""" Predeict"""
 
-#%%
 class GreedySearchDecoder(nn.Module):
     def __init__(self, encoder, decoder):
         super(GreedySearchDecoder, self).__init__()
@@ -683,8 +675,8 @@ class GreedySearchDecoder(nn.Module):
         return all_tokens, all_scores
 
 #%%
-encoder = torch.load('encoder_v3')
-decoder = torch.load('decoder_v3')
+encoder = torch.load('encoder_pretrain')
+decoder = torch.load('decoder_pretrain')
 encoder.eval()
 decoder.eval()
 
@@ -692,6 +684,11 @@ decoder.eval()
 searcher = GreedySearchDecoder(encoder, decoder)
 
 
+#%%
+myVoc.word2index
+#%%
+indexes_batch = [indexesFromSentence(myVoc, '不會')]
+indexes_batch
 #%%
 
 def evaluate(encoder, decoder, searcher, voc, sentence, max_length=MAX_LENGTH):
@@ -737,14 +734,40 @@ def evaluateInput(encoder, decoder, searcher, voc):
 #%%
 evaluateInput(encoder, decoder, searcher, myVoc)
 
-#%%
-testSentence = '你好嗎?'
-testVoc = Voc('testSentence')
-
-for char in testSentence:
-    testVoc.addSentence(char)
 
 #%%
-testVoc.index2word,testVoc.word2index
+""" for testing """
+embedded = embedding(torch.cuda.LongTensor(input_variable)) """ cuda 用法  解決問題:[expected torch.LongTensor (got torch.cuda.LongTensor)]"""
+embedded
 
 #%%
+""" [Debug] 追蹤 (用於檢測切字或結巴斷詞)"""
+pair_batch = [random.choice(sample_qa_pair) for _ in range(small_batch_size)]
+pair_batch.sort(key=lambda question: len(question[0]), reverse=True) ## for chinese char
+pair_batch
+input_batch, output_batch = [], []
+for pair in pair_batch:
+    input_batch.append(pair[0])
+    output_batch.append(pair[1])
+
+indexes_batch = [indexesFromSentence(myVoc, sentence) for sentence in input_batch]
+indexes_batch
+
+indexes_batch[0] ## 詞所對應的編號
+for val in indexes_batch[0]:
+    print(myVoc.index2word[val])    ## 編號找字
+
+#%%
+print(input_variable[8])
+for val in input_variable[3]:
+    print(myVoc.index2word[val.item()])    ## 編號找字
+
+#%%
+input_variable
+#%%
+print("input_variable:", input_variable)
+print("lengths:", lengths)
+print("target_variable:", target_variable)
+print("mask:", mask)
+print("max_target_len:", max_target_len)
+
