@@ -143,10 +143,10 @@ for single_pair in sample_qa_pair:
     myVoc.addSentence(a_)
 
 print(q_,a_)
+
 #%%
-myVoc.index2word, myVoc.word2index, myVoc.word2count, myVoc.num_words
-#%%
-myVoc.num_words
+# myVoc.index2word, myVoc.word2index, myVoc.word2count, myVoc.num_words
+
 #%%
 matrix_len = myVoc.num_words
 weights_matrix = np.zeros((matrix_len, 300))    # 初始化
@@ -193,12 +193,8 @@ embedding = nn.Embedding.from_pretrained(weight).to(device)
 # Get embeddings for index 1
 input = torch.LongTensor([0]).to(device)
 embedding(input)    ## weights_matrix
-#%%
 weights_matrix[1]
-#%%
-myVoc.index2word[1]
-#%%
-embedding.size
+
 #%%
 """ Prepare data for model (未改)"""   
 
@@ -513,28 +509,6 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
             loss += mask_loss
             print_losses.append(mask_loss.item() * nTotal)
             n_totals += nTotal
-
-
-            if(t==0 and False):
-                print('=============')
-                # print(decoder_input, decoder_hidden, encoder_outputs)
-                # print(decoder_output.size())
-                print(decoder_hidden)
-
-            #     # """
-
-            #     # decoder output is NaN!!
-
-            #     # """
-
-            #     print('=============')
-            #     # print(decoder_output, target_variable[t], mask[t])
-            #     print(mask_loss)
-            #     print(loss)          
-
-            #     if(math.isnan(mask_loss)):
-            #         print('=============')
-            #         print(decoder_output, target_variable[t], mask[t])
                 
     else:
         for t in range(max_target_len):
@@ -568,8 +542,8 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 #%%
 """ Training """
-n_iteration = 5000
-batch_size = 32
+n_iteration = 50000
+batch_size = 16
 # Load batches for each iteration
 # training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
 
@@ -614,7 +588,7 @@ encoder = encoder.to(device)
 decoder = decoder.to(device)
 
 #%%
-learning_rate = 0.0001
+learning_rate = 0.0002
 decoder_learning_ratio = 5.0
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
@@ -738,6 +712,22 @@ def evaluateInput(encoder, decoder, searcher, voc):
 
 #%%
 evaluateInput(encoder, decoder, searcher, myVoc)
+
+#%%
+def SingleEvaluateInput(encoder, decoder, searcher, voc ,input_sentence):
+    try:
+        # Evaluate sentence
+        output_words = evaluate(encoder, decoder, searcher, voc, input_sentence)
+        # Format and print response sentence
+        output_words[:] = [x for x in output_words if not (x == 'EOS' or x == 'PAD')]
+        print('Q:', input_sentence)
+        print('Bot:', ' '.join(output_words))
+
+    except KeyError:
+        print("Error: Encountered unknown word.")
+#%%
+input_sentence = '我'
+SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
 
 
 #%%
