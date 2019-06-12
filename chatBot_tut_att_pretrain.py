@@ -39,8 +39,6 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\pretrain_fasttext_cc_zh_300.bin'
 model = FastText.load_fasttext_format(modelPath)
 
-#%%
-model = None
 
 #%%
 def prepareData():
@@ -173,6 +171,9 @@ for index,word in myVoc.index2word.items():
             weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(300))   ## random
             # print(msg)
 
+#%%
+""" 釋放 pretrain 資源 """
+model = None    
 #%%
 weights_matrix[myVoc.word2index['EOS']]
 #%%
@@ -414,7 +415,7 @@ decoder = decoder.to(device)
 
 #%%
 """ Example for validation """
-small_batch_size = 64
+small_batch_size = 32
 batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(small_batch_size)])
 input_variable, lengths, target_variable, mask, max_target_len = batches
 
@@ -568,7 +569,7 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 #%%
 """ Training """
 n_iteration = 5000
-batch_size = 128
+batch_size = 32
 # Load batches for each iteration
 # training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
 
@@ -590,6 +591,7 @@ print_every = 100
 clip = 50.0
 teacher_forcing_ratio = 1.0
 
+
 #%%
 """ Model setup """
 hidden_size = 300
@@ -600,8 +602,10 @@ attn_model = 'dot'
 
 print('Building encoder and decoder ...')
 
-# Initialize word embeddings
-embedding = nn.Embedding(myVoc.num_words, hidden_size)
+# # Initialize word embeddings
+# embedding = nn.Embedding(myVoc.num_words, hidden_size)
+
+# Embedding 使用 pre-train fasttex word embedding
 # Initialize encoder & decoder models
 encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
 decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
@@ -615,7 +619,8 @@ decoder_learning_ratio = 5.0
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
 
-
+#%%
+# torch.cuda.empty_cache()
 #%%
 
 print("Start Training...")
