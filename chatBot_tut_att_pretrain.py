@@ -42,7 +42,7 @@ model = FastText.load_fasttext_format(modelPath)
 
 #%%
 def prepareData():
-    filename = R'data/Gossiping-QA-Dataset.txt'
+    filename = R'data/Gossiping-QA-Dataset_10000.txt'
     qa_pair = list()
     with open(filename , encoding ='utf-8') as f:
         content = f.readlines()
@@ -532,7 +532,7 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 #%%
 """ Training """
-n_iteration = 500000
+n_iteration = 312500
 batch_size = 32
 # Load batches for each iteration
 training_batches = list()
