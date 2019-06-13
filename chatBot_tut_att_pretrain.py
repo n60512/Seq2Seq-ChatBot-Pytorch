@@ -24,6 +24,7 @@ import gensim
 import jieba
 import math
 import numpy as np
+import time
 
 #%%
 """ Set device """
@@ -35,7 +36,6 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 
 # modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\word2vec.model'
 # model = models.Word2Vec.load(modelPath)
-
 modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\pretrain_fasttext_cc_zh_300.bin'
 model = FastText.load_fasttext_format(modelPath)
 
@@ -198,11 +198,11 @@ weights_matrix[1]
 #%%
 """ Prepare data for model (未改)"""   
 
-
-def indexesFromSentence(voc, sentence ,mode = 'word'):
-    """ 可選 word level 或 char-level """
+def indexesFromSentence(voc, sentence ,mode = 'word' , MAX_LENGTH = 20):
+    """ 可選 word level 或 char-level; 可設定 Max length """
     # return [voc.word2index[word] for word in sentence.split(' ')] + [EOS_token]
     seg_list = jieba.lcut(sentence)
+    seg_list = seg_list[:20]
     if(mode == 'word'):
         return [voc.word2index[word] for word in seg_list] + [EOS_token]
     elif (mode == 'char'):
@@ -242,7 +242,7 @@ def outputVar(l, voc):
     return padVar, mask, max_target_len
 
 # Returns all items for a given batch of pairs
-def batch2TrainData(voc, pair_batch):
+def batch2TrainData(voc, pair_batch , MAX_LENGTH = 20):
     # pair_batch.sort(key=lambda x: len(x[0].split(" ")), reverse=True)
     pair_batch.sort(key=lambda question: len(question[0]), reverse=True) ## for chinese char
     input_batch, output_batch = [], []
@@ -270,22 +270,13 @@ class EncoderRNN(nn.Module):
                           dropout=(0 if n_layers == 1 else dropout), bidirectional=True)
 
     def forward(self, input_seq, input_lengths, hidden=None):
-        # # Convert word indexes to embeddings
-        # embedded = self.embedding(input_seq)
-        # # Pack padded batch of sequences for RNN module
-        # packed = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths) ## 產生 padding 後的 embedding
-
-        # embedded = self.embedding(torch.LongTensor([input_seq]))
-
-        ## pre-train
+        # Convert word indexes to embeddings
+        # pre-train fasttext embedding
         embedded = embedding(torch.cuda.LongTensor(input_seq))
         packed = embedded
 
         # Forward pass through GRU
         outputs, hidden = self.gru(packed, hidden)
-        # # Unpack padding
-        # outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
-
         # Sum bidirectional GRU outputs
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, : ,self.hidden_size:]
         # Return output and final hidden state
@@ -356,8 +347,7 @@ class LuongAttnDecoderRNN(nn.Module):
 
     def forward(self, input_step, last_hidden, encoder_outputs):
         # Note: we run this one step (word) at a time
-        # Get embedding of current input word
-        # embedded = self.embedding(input_step)
+        # Get embedding of current input word 'index'
         embedded = embedding(torch.cuda.LongTensor(input_step))
         embedded = self.embedding_dropout(embedded)
         # Forward through unidirectional GRU
@@ -462,7 +452,7 @@ decoder_output, decoder_hidden = decoder(
 #%%
 """ Training Function """
 
-MAX_LENGTH=50
+MAX_LENGTH=20
 
 def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, embedding,
           encoder_optimizer, decoder_optimizer, batch_size, clip, max_length=MAX_LENGTH):
@@ -542,11 +532,9 @@ def train(input_variable, lengths, target_variable, mask, max_target_len, encode
 
 #%%
 """ Training """
-n_iteration = 50000
-batch_size = 16
+n_iteration = 500000
+batch_size = 32
 # Load batches for each iteration
-# training_batches = [batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(batch_size)]) for _ in range(n_iteration)]
-
 training_batches = list()
 for _ in range(n_iteration):
     training_batches.append(batch2TrainData(myVoc, [random.choice(sample_qa_pair) for i in range(batch_size)]))
@@ -554,7 +542,8 @@ for _ in range(n_iteration):
         print('Num of n_iteration [%s] is Success' % _)
 
 #%%
-for obj in training_batches[1]:
+""" Show training_batches shape """
+for obj in training_batches[0]:
     print(obj.size())
 #%%
 # Initializations
@@ -562,9 +551,9 @@ print('Initializing ...')
 start_iteration = 1
 print_loss = 0
 print_every = 100
+store_every = n_iteration/10
 clip = 50.0
 teacher_forcing_ratio = 1.0
-
 
 #%%
 """ Model setup """
@@ -575,11 +564,7 @@ dropout = 0.1
 attn_model = 'dot'
 
 print('Building encoder and decoder ...')
-
-# # Initialize word embeddings
-# embedding = nn.Embedding(myVoc.num_words, hidden_size)
-
-# Embedding 使用 pre-train fasttex word embedding
+print('Using pre-train fasttex word embedding')
 # Initialize encoder & decoder models
 encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
 decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
@@ -588,7 +573,7 @@ encoder = encoder.to(device)
 decoder = decoder.to(device)
 
 #%%
-learning_rate = 0.0002
+learning_rate = 0.00014
 decoder_learning_ratio = 5.0
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
@@ -596,7 +581,7 @@ decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_
 #%%
 # torch.cuda.empty_cache()
 #%%
-
+sTime = time.time()
 print("Start Training...")
 for iteration in range(start_iteration, n_iteration + 1):
     training_batch = training_batches[iteration - 1]
@@ -608,20 +593,24 @@ for iteration in range(start_iteration, n_iteration + 1):
                  decoder, embedding, encoder_optimizer, decoder_optimizer, batch_size, clip)
     print_loss += loss
 
-
     # Print progress
     if iteration % print_every == 0:
         print_loss_avg = print_loss / print_every
-        print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f}".format(iteration, iteration / n_iteration * 100, print_loss_avg))
+        proccess_time = time.time()-sTime
+        print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f} ; Process Time: {:.3f}".format(iteration, iteration / n_iteration * 100, print_loss_avg, proccess_time))
         print_loss = 0
 
-torch.save(encoder, 'encoder_pretrain')
-torch.save(decoder, 'decoder_pretrain')
-
-
+    # Store current model
+    if iteration % store_every == 0:
+        torch.save(encoder, 'encoder_pretrain_')
+        torch.save(decoder, 'decoder_pretrain_')
 
 #%%
-""" Predeict"""
+torch.save(encoder, 'encoder_pretrain_')
+torch.save(decoder, 'decoder_pretrain_')
+
+#%%
+""" Evaluate Model """
 
 class GreedySearchDecoder(nn.Module):
     def __init__(self, encoder, decoder):
@@ -662,12 +651,6 @@ decoder.eval()
 #%%
 searcher = GreedySearchDecoder(encoder, decoder)
 
-
-#%%
-myVoc.word2index
-#%%
-indexes_batch = [indexesFromSentence(myVoc, '不會')]
-indexes_batch
 #%%
 
 def evaluate(encoder, decoder, searcher, voc, sentence, max_length=MAX_LENGTH):
@@ -726,8 +709,21 @@ def SingleEvaluateInput(encoder, decoder, searcher, voc ,input_sentence):
     except KeyError:
         print("Error: Encountered unknown word.")
 #%%
-input_sentence = '我'
+input_sentence = '在家跌倒的八卦'
 SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #%%
@@ -766,3 +762,25 @@ print("target_variable:", target_variable)
 print("mask:", mask)
 print("max_target_len:", max_target_len)
 
+
+#%%
+""" Example for validation """
+sample_qa_pair1 = [['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎']]
+
+small_batch_size = 4
+batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair1) for _ in range(small_batch_size)])
+input_variable, lengths, target_variable, mask, max_target_len = batches
+input_variable, lengths, target_variable, mask, max_target_len
+
+#%%
+qa_pair[0]
+
+#%%
+a = '吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦'
+seg_list = jieba.lcut(a)
+seg_list, len(seg_list)
+
+#%%
+seg_list[:20]
+
+#%%
