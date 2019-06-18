@@ -36,20 +36,19 @@ device = torch.device("cuda" if USE_CUDA else "cpu")
 
 # modelPath = R'C:\Users\kobe24\Desktop\PreTrain_Model\word2vec.model'
 # model = models.Word2Vec.load(modelPath)
-modelPath = R'w2v/Gossiping_w2v_model.model'
+modelPath = R'word2vec\model\Gossiping_w2v_model.model'
 model = models.Word2Vec.load(modelPath)
 
 
 #%%
-def prepareData():
-    filename = R'data/Gossiping-QA-Dataset.txt'
+def prepareData(filename = R'data\Gossiping-QA-Dataset.txt'):
     qa_pair = list()
     with open(filename , encoding ='utf-8') as f:
         content = f.readlines()
     
     for pair in content:
         tmp = pair.replace(' ','').replace('\n','').split('\t') ## split  Q && A
-        if(len(tmp)==2):    
+        if(len(tmp)==2):
             qa_pair.append([re.sub('\W', '', tmp[0]),re.sub('\W', '', tmp[1])]) ## Sentence 正規化
 
     return qa_pair
@@ -57,6 +56,7 @@ def prepareData():
 qa_pair = prepareData()
 
 #%%
+
 # Default word tokens
 PAD_token = 0  # Used for padding short sentences
 SOS_token = 1  # Start-of-sentence token
@@ -142,23 +142,23 @@ for single_pair in sample_qa_pair:
     myVoc.addSentence(q_)
     myVoc.addSentence(a_)
 
-# print(q_,a_)
+print(q_,a_)
 
 #%%
 # myVoc.index2word, myVoc.word2index, myVoc.word2count, myVoc.num_words
 
 #%%
 matrix_len = myVoc.num_words
-weights_matrix = np.zeros((matrix_len, 250))    # 初始化
+weights_matrix = np.zeros((matrix_len, 300))    # 初始化
 words_found = 0
 weights_matrix
 
 #%%
 for index,word in myVoc.index2word.items():
     if(word == 'EOS' or word =='SOS'):
-        weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(250))   ## random
+        weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(300))   ## random
     elif(word == 'PAD'):
-        weights_matrix[index] = np.zeros(250)   
+        weights_matrix[index] = np.zeros(300)   
     else:
         try: 
             weights_matrix[index] = model[word]
@@ -168,18 +168,9 @@ for index,word in myVoc.index2word.items():
         except KeyError as msg:
             # weights_matrix[i] = np.random.normal(scale=0.6, size=(emb_dim, ))
             # weights_matrix[index] = (weights_matrix[index-1] + model[myVoc.index2word[index + 1]])/2
-            weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(250))   ## random
+            weights_matrix[index] = np.random.uniform(low=-1, high=1, size=(300))   ## random
             # print(msg)
 
-#%%
-""" 釋放 pretrain 資源 """
-model = None    
-#%%
-weights_matrix[myVoc.word2index['SOS']]
-#%%
-myVoc.word2index['PAD'],myVoc.word2index['歡迎']
-#%%
-weights_matrix.shape,myVoc.word2index
 
 #%%
 num_embeddings, embedding_dim = weights_matrix.shape
@@ -188,12 +179,10 @@ num_embeddings, embedding_dim
 #%%
 weight = torch.FloatTensor(weights_matrix)
 embedding = nn.Embedding.from_pretrained(weight).to(device)
+
 #%%
-""" test embedding """
-# Get embeddings for index 1
-input = torch.LongTensor([0]).to(device)
-embedding(input)    ## weights_matrix
-weights_matrix[1]
+""" 釋放 pretrain 資源 """
+# model = None    
 
 #%%
 """ Prepare data for model (未改)"""   
@@ -254,9 +243,8 @@ def batch2TrainData(voc, pair_batch , MAX_LENGTH = 20):
     return inp, lengths, output, mask, max_target_len
 
 """ (以上未改) """
-
 #%%
-""" Encoder Model"""
+""" Seq2Seq Model"""
 class EncoderRNN(nn.Module):
     def __init__(self, hidden_size, embedding, n_layers=1, dropout=0):
         super(EncoderRNN, self).__init__()
@@ -282,7 +270,6 @@ class EncoderRNN(nn.Module):
         # Return output and final hidden state
         return outputs, hidden
 
-#%%
 # Luong attention layer
 class Attn(nn.Module):
     def __init__(self, method, hidden_size):
@@ -322,8 +309,6 @@ class Attn(nn.Module):
 
         # Return the softmax normalized probability scores (with added dimension)
         return F.softmax(attn_energies, dim=1).unsqueeze(1)
-
-#%%
 
 class LuongAttnDecoderRNN(nn.Module):
     def __init__(self, attn_model, embedding, hidden_size, output_size, n_layers=1, dropout=0.1):
@@ -367,7 +352,6 @@ class LuongAttnDecoderRNN(nn.Module):
         # Return output and final hidden state
         return output, hidden
 
-#%%
 def maskNLLLoss(inp, target, mask):
     nTotal = mask.sum()
     crossEntropy = -torch.log(torch.gather(inp, 1, target.view(-1, 1)).squeeze(1))
@@ -375,169 +359,6 @@ def maskNLLLoss(inp, target, mask):
     loss = loss.to(device)
     return loss, nTotal.item()
 
-#%%
-""" Training Function """
-
-MAX_LENGTH=20
-
-def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, embedding,
-          encoder_optimizer, decoder_optimizer, batch_size, clip, max_length=MAX_LENGTH):
-
-    # Zero gradients
-    encoder_optimizer.zero_grad()
-    decoder_optimizer.zero_grad()
-
-    # Set device options
-    input_variable = input_variable.to(device)
-    lengths = lengths.to(device)
-    target_variable = target_variable.to(device)
-    mask = mask.to(device)
-
-    # Initialize variables
-    loss = 0
-    print_losses = []
-    n_totals = 0
-
-    # Forward pass through encoder
-    encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
-
-    # Create initial decoder input (start with SOS tokens for each sentence)
-    decoder_input = torch.LongTensor([[SOS_token for _ in range(batch_size)]])
-    decoder_input = decoder_input.to(device)
-
-    # Set initial decoder hidden state to the encoder's final hidden state
-    decoder_hidden = encoder_hidden[:decoder.n_layers]
-
-    # Determine if we are using teacher forcing this iteration
-    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
-
-    # Forward batch of sequences through decoder one time step at a time
-    if use_teacher_forcing:
-        for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
-
-            # Teacher forcing: next input is current target
-            decoder_input = target_variable[t].view(1, -1)
-            # Calculate and accumulate loss
-            mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[t], mask[t])
-            loss += mask_loss
-            print_losses.append(mask_loss.item() * nTotal)
-            n_totals += nTotal
-                
-    else:
-        for t in range(max_target_len):
-            decoder_output, decoder_hidden = decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
-            # No teacher forcing: next input is decoder's own current output
-            _, topi = decoder_output.topk(1)
-            decoder_input = torch.LongTensor([[topi[i][0] for i in range(batch_size)]])
-            decoder_input = decoder_input.to(device)
-            # Calculate and accumulate loss
-            mask_loss, nTotal = maskNLLLoss(decoder_output, target_variable[t], mask[t])
-            loss += mask_loss
-            print_losses.append(mask_loss.item() * nTotal)
-            n_totals += nTotal
-
-    
-    # Perform backpropatation
-    loss.backward()
-
-    # Clip gradients: gradients are modified in place
-    _ = nn.utils.clip_grad_norm_(encoder.parameters(), clip)
-    _ = nn.utils.clip_grad_norm_(decoder.parameters(), clip)
-
-    # Adjust model weights
-    encoder_optimizer.step()
-    decoder_optimizer.step()
-
-    return sum(print_losses) / n_totals
-
-#%%
-train_pair =sample_qa_pair[:30000]
-len(train_pair)
-#%%
-""" Training """
-n_iteration = 93750 # 30000 pair 100 epoch
-batch_size = 32
-# Load batches for each iteration
-training_batches = list()
-for _ in range(n_iteration):
-    training_batches.append(batch2TrainData(myVoc, [random.choice(train_pair) for i in range(batch_size)]))
-    if(_%100==0):
-        print('Num of n_iteration [%s] is Success' % _)
-
-#%%
-""" Show training_batches shape """
-for obj in training_batches[0]:
-    print(obj.size())
-#%%
-# Initializations
-print('Initializing ...')
-start_iteration = 1
-print_loss = 0
-print_every = 100
-store_every = n_iteration/10
-clip = 50.0
-teacher_forcing_ratio = 1.0
-
-#%%
-""" Model setup """
-hidden_size = 250
-encoder_n_layers = 2
-decoder_n_layers = 2
-dropout = 0.1
-attn_model = 'dot'
-
-print('Building encoder and decoder ...')
-print('Using pre-train word2vec embedding')
-# Initialize encoder & decoder models
-encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
-decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
-# Use appropriate device
-encoder = encoder.to(device)
-decoder = decoder.to(device)
-
-#%%
-learning_rate = 0.00014
-decoder_learning_ratio = 5.0
-encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
-
-#%%
-torch.save(embedding,'10times_model/embedding_w2v_front30000_3')
-#%%
-sTime = time.time()
-print("Start Training...")
-for iteration in range(start_iteration, n_iteration + 1):
-    training_batch = training_batches[iteration - 1]
-    # Extract fields from batch
-    input_variable, lengths, target_variable, mask, max_target_len = training_batch
-
-    # Run a training iteration with batch
-    loss = train(input_variable, lengths, target_variable, mask, max_target_len, encoder,
-                 decoder, embedding, encoder_optimizer, decoder_optimizer, batch_size, clip)
-    print_loss += loss
-
-    # Print progress
-    if iteration % print_every == 0:
-        print_loss_avg = print_loss / print_every
-        proccess_time = time.time()-sTime
-        print("Iteration: {}; Percent complete: {:.1f}%; Average loss: {:.4f} ; Process Time: {:.3f}".format(iteration, iteration / n_iteration * 100, print_loss_avg, proccess_time))
-        print_loss = 0
-    
-    # Store current model
-    if iteration % store_every == 0:
-        torch.save(encoder, ('10times_model/encoder_pretrain_w2v_front30000_3_{:.1f}'.format(iteration / n_iteration * 100)))
-        torch.save(decoder, ('10times_model/decoder_pretrain_w2v_front30000_3_{:.1f}'.format(iteration / n_iteration * 100)))
-
-
-
-#%%
-# torch.save(encoder, ('10times_model/encoder_pretrain_w2v_front30000_3_{:.1f}'.format(iteration / n_iteration * 100)))
-# torch.save(decoder, ('10times_model/decoder_pretrain_w2v_front30000_3_{:.1f}'.format(iteration / n_iteration * 100)))
 
 #%%
 """ Evaluate Model """
@@ -572,19 +393,7 @@ class GreedySearchDecoder(nn.Module):
         # Return collections of word tokens and scores
         return all_tokens, all_scores
 
-#%%
-encoder = torch.load('10times_model/encoder_pretrain_w2v_front30000_3_60.0')
-decoder = torch.load('10times_model/decoder_pretrain_w2v_front30000_3_60.0')
-#%%
-encoder.eval()
-decoder.eval()
-
-#%%
-searcher = GreedySearchDecoder(encoder, decoder)
-
-#%%
-
-def evaluate(encoder, decoder, searcher, voc, sentence, max_length=MAX_LENGTH):
+def evaluate(encoder, decoder, searcher, voc, sentence, max_length=20):
     ### Format input sentence as a batch
     # words -> indexes
     indexes_batch = [indexesFromSentence(voc, sentence)]
@@ -622,11 +431,6 @@ def evaluateInput(encoder, decoder, searcher, voc):
 
         except KeyError:
             print("Error: Encountered unknown word.")
-
-
-#%%
-# evaluateInput(encoder, decoder, searcher, myVoc)
-
 #%%
 def SingleEvaluateInput(encoder, decoder, searcher, voc ,input_sentence):
     try:
@@ -634,143 +438,96 @@ def SingleEvaluateInput(encoder, decoder, searcher, voc ,input_sentence):
         output_words = evaluate(encoder, decoder, searcher, voc, input_sentence)
         # Format and print response sentence
         output_words[:] = [x for x in output_words if not (x == 'EOS' or x == 'PAD')]
-        print('Q:', input_sentence)
+        # print('Q:', input_sentence)
         print('Bot:', ' '.join(output_words))
-
+        # BotAns = ('Bot:', ' '.join(output_words))
+        # return BotAns
     except KeyError:
         print("Error: Encountered unknown word.")
+        # return ("Error: Encountered unknown word.")
+
 #%%
-input_sentence = '菸價為什麼漲這麼少'
-SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
+# evaluateInput(encoder, decoder, searcher, myVoc)
+
 #%%
-for pair_ in qa_pair[30000:30100]:
+embedding = torch.load('chatbot_model\embedding_w2v_front30000')
+encoder = torch.load('chatbot_model\encoder_pretrain_w2v_front30000')
+decoder = torch.load('chatbot_model\decoder_pretrain_w2v_front30000')
+
+encoder.eval()
+decoder.eval()
+
+#%%
+searcher = GreedySearchDecoder(encoder, decoder)
+
+#%%
+for pair_ in qa_pair[:5]:
     print('=========================')
     print(pair_)
     input_sentence = pair_[0]
     SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
 
+#%%
+""" Testing """
+test_qa_pair = prepareData(R'data\Gossiping-QA-Dataset.txt')
+# sample_test_qa_pair = [random.choice(test_qa_pair[30000:]) for _ in range(100)]
+sample_test_qa_pair = test_qa_pair[1000:5000]
+# sample_test_qa_pair
+#%%
 
+with open(R'Result\pretrain_w2v_front30000_res.txt' ,'w', encoding ='utf-8') as output:
+    for pair_ in sample_test_qa_pair:
+        
+        output.write('=========================\n')
+        output.write(str(pair_))
+        output.write('\n')
+            
+        # print('=========================')
+        # print(pair_)
 
-
-
-
-
-
+        input_sentence = pair_[0]
+        botRes = SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
+            
+        output.write(str(botRes)+'\n')
+    
+output.close()
 
 
 #%%
-""" for testing """
-embedded = embedding(torch.cuda.LongTensor(input_variable)) """ cuda 用法  解決問題:[expected torch.LongTensor (got torch.cuda.LongTensor)]"""
-embedded
+for pair_ in sample_test_qa_pair:  
+    print('=========================')
+    print(pair_)
+#%%
+for pair_ in sample_test_qa_pair:        
+           
+    print('=========================')
+    print(pair_)
+
+    input_sentence = pair_[0]
+    SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
+            
 
 #%%
-""" [Debug] 追蹤 (用於檢測切字或結巴斷詞)"""
-pair_batch = [random.choice(sample_qa_pair) for _ in range(small_batch_size)]
-pair_batch.sort(key=lambda question: len(question[0]), reverse=True) ## for chinese char
-pair_batch
-input_batch, output_batch = [], []
-for pair in pair_batch:
-    input_batch.append(pair[0])
-    output_batch.append(pair[1])
-
-indexes_batch = [indexesFromSentence(myVoc, sentence) for sentence in input_batch]
-indexes_batch
-
-indexes_batch[0] ## 詞所對應的編號
-for val in indexes_batch[0]:
-    print(myVoc.index2word[val])    ## 編號找字
+sample_test_qa_pair
 
 #%%
-print(input_variable[8])
-for val in input_variable[3]:
-    print(myVoc.index2word[val.item()])    ## 編號找字
+input_sentence = 'IKEA為何總是這麼多人'
+SingleEvaluateInput(encoder, decoder, searcher, myVoc , input_sentence)
 
 #%%
-input_variable
-#%%
-print("input_variable:", input_variable)
-print("lengths:", lengths)
-print("target_variable:", target_variable)
-print("mask:", mask)
-print("max_target_len:", max_target_len)
-
+print(encoder)
+print(decoder)
 
 #%%
-""" Example for validation """
-sample_qa_pair1 = [['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎'],['吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦吃飯時對方一直滑手機怎麼辦','有人看過科學怪校車嗎']]
+台灣人是不是好操弄啊
+學長問我覺得他是什麼樣的人
+找不到工作怎麼辦
 
-small_batch_size = 4
-batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair1) for _ in range(small_batch_size)])
-input_variable, lengths, target_variable, mask, max_target_len = batches
-input_variable, lengths, target_variable, mask, max_target_len
-
+為什麼美國不要直接射飛彈暗殺金正恩
+#%%
+for index in range(10,100,10):
+    filePath = '10times_model/Result/pretrain_w2v_front30000_res_{}.txt'.format(index)
+    print(filePath)
+    pass
 
 #%%
-
-""" Single Train testing  [Start] ..."""
-hidden_size = 250
-encoder_n_layers = 2
-decoder_n_layers = 2
-dropout = 0.1
-batch_size = 64
-attn_model = 'dot'
-
-print('Building encoder and decoder ...')
-# Initialize encoder & decoder models
-"""Embedding pretrain"""
-encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
-decoder = LuongAttnDecoderRNN(attn_model,embedding, hidden_size, myVoc.num_words, decoder_n_layers, dropout)
-
-# Use appropriate device
-encoder = encoder.to(device)
-decoder = decoder.to(device)
-
-#%%
-""" Example for validation """
-small_batch_size = 32
-batches = batch2TrainData(myVoc, [random.choice(sample_qa_pair) for _ in range(small_batch_size)])
-input_variable, lengths, target_variable, mask, max_target_len = batches
-
-#%%
-learning_rate = 0.0001
-decoder_learning_ratio = 5.0
-encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
-
-# Zero gradients
-encoder_optimizer.zero_grad()
-decoder_optimizer.zero_grad()
-
-#%%
-""" training example"""
-# Set device options
-input_variable = input_variable.to(device)
-lengths = lengths.to(device)
-target_variable = target_variable.to(device)
-mask = mask.to(device)
-
-""" Initialize variables """
-loss = 0
-print_losses = []
-n_totals = 0
-
-#%%
-""" Forward pass through encoder """
-encoder_outputs, encoder_hidden = encoder(input_variable, lengths)
-
-#%%
-""" Show encoder output """
-encoder_outputs
-
-#%%
-""" Decoder setup"""
-decoder_input = torch.LongTensor([[SOS_token for _ in range(batch_size)]])
-decoder_input = decoder_input.to(device)
-decoder_hidden = encoder_hidden[:decoder.n_layers]
-
-#%%
-""" Forward pass through decoder """ 
-decoder_output, decoder_hidden = decoder(
-    decoder_input, decoder_hidden, encoder_outputs
-)
-""" Single Train testing  [End] ."""
